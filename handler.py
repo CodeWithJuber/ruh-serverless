@@ -9,7 +9,9 @@ chat-completion requests:
 The generation mirrors backend/providers_ruh.py::_extract_prompt/_tokens_to_tensors
 so the VPS side needs only a thin HTTP adapter, not a rewrite.
 """
+import math
 import logging
+import threading
 import os
 import time
 
@@ -18,6 +20,7 @@ import torch
 
 from ruh_model.model import RuhModel
 from ruh_model.tokenizer.bayan import BayanTokenizer
+from ruh_model.tokenizer.conversation import serialize_messages
 
 logger = logging.getLogger("ruh-handler")
 
@@ -25,37 +28,30 @@ CHECKPOINT_DIR = os.environ.get("RUH_CHECKPOINT_DIR", "/app/checkpoint")
 DEVICE = os.environ.get("RUH_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 MAX_NEW_TOKENS_CAP = int(os.environ.get("RUH_MAX_TOKENS_CAP", "512"))
 
-logger.info("Loading Ruh model from %s on %s ...", CHECKPOINT_DIR, DEVICE)
-print(f"[ruh] Loading model from {CHECKPOINT_DIR} on {DEVICE} ...", flush=True)
-try:
-    _model = RuhModel.from_pretrained(CHECKPOINT_DIR)
-    _model.to(DEVICE)
-    _model.train(False)  # inference mode
-    _tokenizer = BayanTokenizer()
-    print("[ruh] Model loaded and warm.", flush=True)
-except Exception as e:
-    print(f"[ruh] FATAL: Failed to load model: {type(e).__name__}: {e}", flush=True)
-    import traceback
-    traceback.print_exc()
-    raise
-logger.info("Ruh model loaded and warm.")
+_model = None
+_tokenizer = None
+_load_lock = threading.Lock()
+
+
+def load_model():
+    global _model, _tokenizer
+    with _load_lock:
+        if _model is None:
+            logger.info("Loading Ruh checkpoint on %s", DEVICE)
+            model = RuhModel.from_pretrained(CHECKPOINT_DIR).to(DEVICE)
+            model.eval()
+            _tokenizer = model.tokenizer or BayanTokenizer.from_pretrained(CHECKPOINT_DIR)
+            _model = model
 
 
 def _extract_prompt(messages: list) -> str:
-    """Get the text of the last user message (mirrors providers_ruh)."""
-    for msg in reversed(messages or []):
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            texts = [b.get("text", "") for b in content if b.get("type") == "text"]
-            return " ".join(texts)
-        return str(content)
-    return ""
+    return serialize_messages(messages)
 
 
 def _generate(prompt: str, max_tokens: int, temperature: float) -> tuple[str, int, int]:
-    tokens = _tokenizer.encode(prompt)
+    load_model()
+    tokens = _tokenizer.encode(prompt, add_eos=False)
+    tokens = tokens[-_model.config.max_seq_len:]
     if not tokens:
         return "", 0, 0
     root_ids = torch.tensor([[t[0] for t in tokens]], dtype=torch.long, device=DEVICE)
@@ -69,7 +65,7 @@ def _generate(prompt: str, max_tokens: int, temperature: float) -> tuple[str, in
             root_ids,
             pattern_ids,
             max_new_tokens=max_new,
-            temperature=temperature if temperature else 1.0,
+            temperature=1.0 if temperature is None else temperature,
             valid_n_roots=valid_n_roots,
         )
     gen_list = generated[0].tolist() if generated.ndim == 2 else generated.tolist()
@@ -86,8 +82,16 @@ def handler(job: dict) -> dict:
     try:
         inp = job.get("input", {}) or {}
         messages = inp.get("messages", [])
+        if not isinstance(messages, list) or not messages or len(messages) > 100 or any(not isinstance(message, dict) for message in messages):
+            raise ValueError("messages must contain 1..100 message objects")
+        if len(str(messages)) > 200000:
+            raise ValueError("Conversation exceeds size limit")
         max_tokens = inp.get("max_tokens", 256)
         temperature = inp.get("temperature", 1.0)
+        if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 1:
+            raise ValueError("max_tokens must be a positive integer")
+        if temperature is not None and (not isinstance(temperature, (int, float)) or not math.isfinite(temperature) or temperature < 0):
+            raise ValueError("temperature must be finite and nonnegative")
         prompt = _extract_prompt(messages)
         if not prompt.strip():
             return {"error": "no user message found in input.messages"}
@@ -113,4 +117,6 @@ def handler(job: dict) -> dict:
         return {"error": f"{type(exc).__name__}: {exc}"}
 
 
-runpod.serverless.start({"handler": handler})
+if __name__ == "__main__":
+    load_model()
+    runpod.serverless.start({"handler": handler})
