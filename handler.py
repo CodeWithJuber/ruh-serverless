@@ -57,8 +57,7 @@ def _generate(prompt: str, max_tokens: int, temperature: float) -> tuple[str, in
     root_ids = torch.tensor([[t[0] for t in tokens]], dtype=torch.long, device=DEVICE)
     pattern_ids = torch.tensor([[t[1] for t in tokens]], dtype=torch.long, device=DEVICE)
     max_new = max(1, min(max_tokens or 256, MAX_NEW_TOKENS_CAP))
-    # Valid vocab size: model trained with n_roots=4000 embedding but only
-    # 62 IDs are valid (4 special + 58 real roots). Mask the rest.
+    # Restrict the model's larger output head to its checkpoint tokenizer.
     valid_n_roots = _tokenizer._vocab.n_roots
     with torch.no_grad():
         generated = _model.generate(
@@ -70,9 +69,10 @@ def _generate(prompt: str, max_tokens: int, temperature: float) -> tuple[str, in
         )
     gen_list = generated[0].tolist() if generated.ndim == 2 else generated.tolist()
     # Only decode the newly generated tokens (skip the prompt)
-    # Model uses default_pattern_id=1 for generated tokens
+    # Keep decoded patterns consistent with legacy roots or V2 byte training.
     new_tokens = gen_list[len(tokens):]
-    gen_tokens = [(int(rid), 1) for rid in new_tokens]
+    pattern = 0 if getattr(_tokenizer, "version", 1) == 2 else 1
+    gen_tokens = [(int(rid), pattern) for rid in new_tokens]
     text = _tokenizer.decode(gen_tokens)
     return text, len(tokens), len(new_tokens)
 
