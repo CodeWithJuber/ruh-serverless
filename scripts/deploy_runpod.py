@@ -62,6 +62,41 @@ def new_template(existing, image, sha):
     return template
 
 
+def health(endpoint, token):
+    request = Request(
+        f"https://api.runpod.ai/v2/{endpoint}/health",
+        headers={"Authorization": "Bearer " + token, "User-Agent": USER_AGENT},
+    )
+    with urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def wait_for_quiet(endpoint, token, deadline_seconds=120):
+    deadline = time.monotonic() + deadline_seconds
+    while time.monotonic() < deadline:
+        jobs = health(endpoint, token).get("jobs", {})
+        if not all(isinstance(jobs.get(key), int) for key in ("inProgress", "inQueue")):
+            raise RuntimeError("RunPod did not report job counts; refusing worker drain")
+        if jobs["inProgress"] == jobs["inQueue"] == 0:
+            return
+        time.sleep(5)
+    raise TimeoutError("RunPod still has active or queued jobs; worker drain refused")
+
+
+def wait_for_workers_to_stop(endpoint, token, deadline_seconds=90):
+    deadline = time.monotonic() + deadline_seconds
+    while time.monotonic() < deadline:
+        workers = health(endpoint, token).get("workers")
+        if not isinstance(workers, dict) or not workers or not all(
+            isinstance(count, int) and count >= 0 for count in workers.values()
+        ):
+            raise RuntimeError("RunPod did not report worker counts; drain unverified")
+        if not any(workers.values()):
+            return
+        time.sleep(5)
+    raise TimeoutError("Old RunPod workers did not stop before the drain deadline")
+
+
 def wait_for_job(endpoint, token, sha, deadline_seconds=600):
     url = f"https://api.runpod.ai/v2/{endpoint}"
     headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
@@ -122,7 +157,10 @@ def wait_for_job(endpoint, token, sha, deadline_seconds=600):
                 )
 
 
-def deploy(endpoint_id, image, sha, token, call=api, smoke=wait_for_job):
+def deploy(
+    endpoint_id, image, sha, token, call=api, smoke=wait_for_job,
+    quiesce=wait_for_quiet, drain=wait_for_workers_to_stop,
+):
     if not re.fullmatch(r"[a-f0-9]{40}", sha):
         raise ValueError("Expected a full Git commit SHA")
     if not re.fullmatch(r"[a-z0-9]+", endpoint_id):
@@ -130,18 +168,23 @@ def deploy(endpoint_id, image, sha, token, call=api, smoke=wait_for_job):
     if image != f"ghcr.io/codewithjuber/ruh-serverless:{sha}":
         raise ValueError("Expected the immutable image tag for this commit")
     endpoint = call("GET", "/endpoints/" + endpoint_id, token)
+    if endpoint["workersMax"] <= 0:
+        raise ValueError("The endpoint is disabled; deployment will not enable it")
     previous = endpoint["templateId"]
     original = call("GET", "/templates/" + previous, token)
+    # Never interrupt an observed job to replace idle workers. Template changes
+    # alone can leave old workers answering every probe and prevent retirement.
+    quiesce(endpoint_id, token)
     template = call("POST", "/templates", token, new_template(original, image, sha))
     update = {
         "templateId": template["id"],
         "workersMin": 0,
         "workersMax": endpoint["workersMax"],
     }
-    # Changing the template revision replaces worker image caches without a
-    # destructive max-workers-to-zero step. Other endpoint settings are untouched.
-    call("PATCH", "/endpoints/" + endpoint_id, token, update)
     try:
+        call("PATCH", "/endpoints/" + endpoint_id, token, {**update, "workersMax": 0})
+        drain(endpoint_id, token)
+        call("PATCH", "/endpoints/" + endpoint_id, token, update)
         job_id = smoke(endpoint_id, token, sha)
     except Exception:
         call(
