@@ -61,12 +61,16 @@ def _generate(prompt: str, max_tokens: int, temperature: float) -> tuple[str, in
     root_ids = torch.tensor([[t[0] for t in tokens]], dtype=torch.long, device=DEVICE)
     pattern_ids = torch.tensor([[t[1] for t in tokens]], dtype=torch.long, device=DEVICE)
     max_new = max(1, min(max_tokens or 256, MAX_NEW_TOKENS_CAP))
+    # Valid vocab size: model trained with n_roots=4000 embedding but only
+    # 62 IDs are valid (4 special + 58 real roots). Mask the rest.
+    valid_n_roots = _tokenizer._vocab.n_roots
     with torch.no_grad():
         generated = _model.generate(
             root_ids,
             pattern_ids,
             max_new_tokens=max_new,
             temperature=temperature if temperature else 1.0,
+            valid_n_roots=valid_n_roots,
         )
     gen_list = generated[0].tolist() if generated.ndim == 2 else generated.tolist()
     # Only decode the newly generated tokens (skip the prompt)
