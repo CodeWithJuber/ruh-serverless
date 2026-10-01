@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
@@ -145,6 +146,24 @@ def test_smoke_cancels_pending_job_when_polling_fails(monkeypatch):
     with pytest.raises(OSError, match="network unavailable"):
         deployment.wait_for_job("endpoint", "test-key", SHA)
     assert paths[-1].endswith("/cancel/pending")
+
+
+def test_smoke_retries_rejected_submission_while_capacity_propagates(monkeypatch):
+    responses = iter([
+        HTTPError("https://api.runpod.ai/run", 409, "Capacity update", {}, None),
+        {"id": "accepted"},
+        {"status": "COMPLETED", "output": {"build_sha": SHA, "choices": [{}]}},
+    ])
+
+    def request(*args, **kwargs):
+        response = next(responses)
+        if isinstance(response, HTTPError):
+            raise response
+        return io.StringIO(json.dumps(response))
+
+    monkeypatch.setattr(deployment, "urlopen", request)
+    monkeypatch.setattr(deployment.time, "sleep", lambda *_: None)
+    assert deployment.wait_for_job("endpoint", "key", SHA) == "accepted"
 
 
 def test_template_uses_only_writable_rest_fields_and_preserves_launch_settings():

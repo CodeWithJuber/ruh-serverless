@@ -112,13 +112,22 @@ def wait_for_job(endpoint, token, sha, deadline_seconds=600):
     try:
         while time.monotonic() < deadline:
             if job_id is None:
-                with urlopen(
-                    Request(
-                        url + "/run", data=json.dumps(payload).encode(), headers=headers
-                    ),
-                    timeout=30,
-                ) as response:
-                    job_id = json.load(response)["id"]
+                try:
+                    with urlopen(
+                        Request(
+                            url + "/run", data=json.dumps(payload).encode(), headers=headers
+                        ),
+                        timeout=30,
+                    ) as response:
+                        job_id = json.load(response)["id"]
+                except HTTPError as exc:
+                    # The queue can still observe max=0 briefly after REST
+                    # restores capacity. These responses reject submission;
+                    # retry without creating duplicate accepted jobs.
+                    if exc.code not in (409, 429):
+                        raise
+                    time.sleep(5)
+                    continue
             with urlopen(
                 Request(url + "/status/" + job_id, headers=headers), timeout=30
             ) as response:
