@@ -1,7 +1,8 @@
 # Ruh English NLP model (46M) — RunPod serverless worker.
-# Base already carries Python 3.11 + PyTorch with CUDA; we add the runpod SDK,
-# the ruh_model package, the checkpoint, and the handler.
-FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+# Incremental build on top of the previous image (which already has the
+# PyTorch base, ruh_model package, and the baked-in checkpoint).
+# This layer only pins the runpod SDK, ensures numpy, and updates the handler.
+FROM ghcr.io/codewithjuber/ruh-serverless:latest
 
 ENV PYTHONUNBUFFERED=1 \
     RUH_CHECKPOINT_DIR=/app/checkpoint \
@@ -10,15 +11,6 @@ ENV PYTHONUNBUFFERED=1 \
 RUN pip install --no-cache-dir "runpod==1.7.10" numpy
 
 WORKDIR /app
-COPY ruh_model/ /app/ruh_model/
-
-# Checkpoint baked in at build time (downloaded from the GitHub Release).
-ARG CHECKPOINT_URL
-RUN mkdir -p /app/checkpoint && \
-    curl -sSL -o /app/checkpoint/model.pt "${CHECKPOINT_URL}/model.pt" && \
-    curl -sSL -o /app/checkpoint/config.json "${CHECKPOINT_URL}/config.json" && \
-    ls -la /app/checkpoint/
-
-COPY handler.py /app/
+COPY handler.py /app/handler.py
 
 CMD ["python", "/app/handler.py"]
