@@ -12,5 +12,6 @@ RUN pip install --no-cache-dir "runpod==1.7.10" numpy
 
 WORKDIR /app
 COPY handler.py /app/handler.py
+COPY backend/qca/ /app/backend/qca/
 
 CMD ["python", "/app/handler.py"]
