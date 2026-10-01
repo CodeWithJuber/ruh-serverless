@@ -99,3 +99,21 @@ def test_smoke_cancels_pending_job_when_polling_fails(monkeypatch):
     with pytest.raises(OSError, match="network unavailable"):
         deployment.wait_for_job("endpoint", "test-key", SHA)
     assert paths[-1].endswith("/cancel/pending")
+
+
+def test_template_uses_only_writable_rest_fields_and_preserves_launch_settings():
+    existing = {
+        "startJupyter": True,
+        "startSsh": True,
+        "dockerEntrypoint": ["python"],
+        "dockerStartCmd": ["handler.py"],
+        "env": {"KEEP": "value"},
+        "containerDiskInGb": 10,
+    }
+    first = deployment.new_template(existing, IMAGE, SHA)
+    second = deployment.new_template(existing, IMAGE, SHA)
+    assert "startJupyter" not in first and "startSsh" not in first
+    assert first["dockerEntrypoint"] == ["python"]
+    assert first["dockerStartCmd"] == ["handler.py"]
+    assert first["env"] == existing["env"]
+    assert first["name"] != second["name"]

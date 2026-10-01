@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -41,14 +42,20 @@ def new_template(existing, image, sha):
         "volumeInGb",
         "volumeMountPath",
         "ports",
+        "dockerEntrypoint",
         "dockerStartCmd",
-        "startJupyter",
-        "startSsh",
     )
     template = {field: existing[field] for field in fields if field in existing}
-    template.update(name=f"ruh-{sha[:12]}", imageName=image, isServerless=True)
+    template.update(
+        name=f"ruh-{sha[:12]}-{uuid.uuid4().hex[:8]}",
+        imageName=image,
+        isServerless=True,
+    )
+    # startJupyter/startSsh are legacy response-only fields, rejected by REST POST.
     # Preserve existing environment values without putting them in job logs.
-    if isinstance(existing.get("config"), dict):
+    if isinstance(existing.get("env"), dict):
+        template["env"] = existing["env"]
+    elif isinstance(existing.get("config"), dict):
         env = existing["config"].get("env")
         if env is not None:
             template["env"] = env
