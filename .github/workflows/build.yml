@@ -1,0 +1,36 @@
+name: build-and-push
+on:
+  push:
+    branches: [main]
+    paths:
+      - "handler.py"
+      - "Dockerfile"
+      - "ruh_model/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/codewithjuber/ruh-serverless:latest
+          build-args: |
+            CHECKPOINT_URL=http://172.104.164.165:8888
+          # NOTE: 172.104.164.165:8888 is a TEMPORARY file server on the Mizan VPS
+          # serving the khalq_akhar/epoch_19 checkpoint. Take it down after the
+          # image builds (ufw delete allow 8888 + kill the http.server).
