@@ -1,22 +1,49 @@
 name: build-and-push
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     paths:
       - "handler.py"
       - "Dockerfile"
       - "ruh_model/**"
+      - "backend/**"
+      - "scripts/**"
+      - "checkpoint-manifest.json"
+      - ".dockerignore"
       - ".github/workflows/build.yml"
   workflow_dispatch:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "torch==2.5.1" --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install pytest pytest-asyncio PyYAML "runpod==1.7.10" "numpy==1.26.4"
+      - run: PYTHONPATH=backend:. pytest ruh_model/tests/ tests/ -q
+
   build:
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch and verify checkpoint
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+        run: python scripts/fetch_checkpoint.py
 
       - uses: docker/login-action@v3
         with:
@@ -28,9 +55,6 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/codewithjuber/ruh-serverless:latest
-          build-args: |
-            CHECKPOINT_URL=http://172.104.164.165:8888
-          # NOTE: 172.104.164.165:8888 is a TEMPORARY file server on the Mizan VPS
-          # serving the khalq_akhar/epoch_19 checkpoint. Take it down after the
-          # image builds (ufw delete allow 8888 + kill the http.server).
+          tags: |
+            ghcr.io/codewithjuber/ruh-serverless:${{ github.sha }}
+            ghcr.io/codewithjuber/ruh-serverless:latest

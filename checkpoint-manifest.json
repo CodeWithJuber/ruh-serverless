@@ -1,0 +1,10 @@
+{
+  "dataset": "zubairshaikh/ruh-model-checkpoints",
+  "version": 1,
+  "directory": "checkpoints/khalq_akhar/epoch_19",
+  "tokenizer_version": 1,
+  "files": {
+    "config.json": {"sha256": "26237e4fedf25e2482ec9ab12d057443c3605d34b556e5e29a4da74991b4db6a", "bytes": 414},
+    "model.pt": {"sha256": "f43315cdc944d4644e48bb0ef12c431a80ee24bf6cb2c3a2b70a95b0e056e76a", "bytes": 183991059}
+  }
+}
