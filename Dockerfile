@@ -1,6 +1,8 @@
 # Rebuildable CUDA runtime plus explicit verified weights; no inherited worker output.
 FROM mirror.gcr.io/library/python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+ARG RUH_BUILD_SHA=unknown
+ENV RUH_BUILD_SHA=$RUH_BUILD_SHA
 ENV PYTHONUNBUFFERED=1 RUH_CHECKPOINT_DIR=/app/checkpoint RUH_DEVICE=cuda
 WORKDIR /app
 COPY checkpoint-manifest.json /app/checkpoint-manifest.json
