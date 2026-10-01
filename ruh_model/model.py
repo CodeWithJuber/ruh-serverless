@@ -131,6 +131,7 @@ class RuhModel(nn.Module):
         max_new_tokens: int = 128,
         temperature: float = 1.0,
         default_pattern_id: int = 1,
+        valid_n_roots: int | None = None,
     ) -> Tensor:
         """Autoregressive generation of root ID sequences.
 
@@ -143,6 +144,7 @@ class RuhModel(nn.Module):
             max_new_tokens: Maximum number of tokens to generate.
             temperature: Sampling temperature. Lower = more deterministic.
             default_pattern_id: Pattern ID to assign to generated tokens.
+            valid_n_roots: If set, restrict sampling to IDs < valid_n_roots.
 
         Returns:
             Tensor of shape (B, S + max_new_tokens) with generated root IDs.
@@ -152,7 +154,7 @@ class RuhModel(nn.Module):
 
         for _ in range(max_new_tokens):
             next_token = self._sample_next_token(
-                generated, patterns, temperature
+                generated, patterns, temperature, valid_n_roots
             )
             generated = torch.cat([generated, next_token], dim=1)
 
@@ -171,6 +173,7 @@ class RuhModel(nn.Module):
         root_ids: Tensor,
         pattern_ids: Tensor,
         temperature: float,
+        valid_n_roots: int | None = None,
     ) -> Tensor:
         """Sample a single next token from model output.
 
@@ -178,12 +181,19 @@ class RuhModel(nn.Module):
             root_ids: Current sequence (B, S).
             pattern_ids: Current patterns (B, S).
             temperature: Sampling temperature.
+            valid_n_roots: If set, mask logits for IDs >= valid_n_roots
+                (model was trained with larger embedding than vocab).
 
         Returns:
             Sampled token IDs of shape (B, 1).
         """
         result = self.forward(root_ids, pattern_ids)
         logits = result["logits"][:, -1, :]
+
+        # Mask invalid root IDs (beyond actual vocab size)
+        if valid_n_roots is not None and valid_n_roots < logits.shape[-1]:
+            logits = logits.clone()
+            logits[..., valid_n_roots:] = float("-inf")
 
         if temperature <= 0:
             return logits.argmax(dim=-1, keepdim=True)
