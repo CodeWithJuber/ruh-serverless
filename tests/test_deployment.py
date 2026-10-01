@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
@@ -32,11 +33,13 @@ def test_success_preserves_worker_limit_and_has_zero_minimum():
         return {"id": "new"}
 
     result = deployment.deploy(
-        "endpoint", IMAGE, SHA, "test-key", call, lambda *_: "verified-job"
+        "endpoint", IMAGE, SHA, "test-key", call, lambda *_: "verified-job",
+        quiesce=lambda *_: None, drain=lambda *_: None,
     )
     assert result["smoke_job"] == "verified-job"
     assert mutations[0][2]["env"] == {"SETTING": "preserved"}
-    assert mutations[1][2] == {"templateId": "new", "workersMin": 0, "workersMax": 3}
+    assert mutations[1][2] == {"templateId": "new", "workersMin": 0, "workersMax": 0}
+    assert mutations[2][2] == {"templateId": "new", "workersMin": 0, "workersMax": 3}
 
 
 def test_failed_smoke_restores_original_template():
@@ -55,8 +58,52 @@ def test_failed_smoke_restores_original_template():
         raise RuntimeError("stale worker")
 
     with pytest.raises(RuntimeError, match="stale worker"):
-        deployment.deploy("endpoint", IMAGE, SHA, "test-key", call, fail)
+        deployment.deploy(
+            "endpoint", IMAGE, SHA, "test-key", call, fail,
+            quiesce=lambda *_: None, drain=lambda *_: None,
+        )
     assert patches[-1] == {"templateId": "old", "workersMin": 0, "workersMax": 3}
+
+
+def test_active_jobs_refuse_deployment_without_any_mutation():
+    def call(method, path, token, data=None):
+        assert method == "GET", "Busy endpoints must never be scaled or retargeted"
+        return {"templateId": "old", "workersMax": 3}
+
+    def busy(*_):
+        raise TimeoutError("active jobs")
+
+    with pytest.raises(TimeoutError, match="active jobs"):
+        deployment.deploy("endpoint", IMAGE, SHA, "key", call, quiesce=busy)
+
+
+def test_failed_worker_drain_restores_capacity_and_template_before_smoke():
+    patches = []
+
+    def call(method, path, token, data=None):
+        if method == "PATCH":
+            patches.append(data)
+        return {"id": "new", "templateId": "old", "workersMax": 3}
+
+    def stuck(*_):
+        raise TimeoutError("worker drain")
+
+    with pytest.raises(TimeoutError, match="worker drain"):
+        deployment.deploy(
+            "endpoint", IMAGE, SHA, "key", call,
+            smoke=lambda *_: pytest.fail("Cannot probe workers before verified drain"),
+            quiesce=lambda *_: None, drain=stuck,
+        )
+    assert patches == [
+        {"templateId": "new", "workersMin": 0, "workersMax": 0},
+        {"templateId": "old", "workersMin": 0, "workersMax": 3},
+    ]
+
+
+def test_missing_job_health_refuses_worker_drain(monkeypatch):
+    monkeypatch.setattr(deployment, "health", lambda *_: {"jobs": {}})
+    with pytest.raises(RuntimeError, match="refusing worker drain"):
+        deployment.wait_for_quiet("endpoint", "key")
 
 
 def test_mutable_tag_is_rejected_before_api_access():
@@ -99,6 +146,24 @@ def test_smoke_cancels_pending_job_when_polling_fails(monkeypatch):
     with pytest.raises(OSError, match="network unavailable"):
         deployment.wait_for_job("endpoint", "test-key", SHA)
     assert paths[-1].endswith("/cancel/pending")
+
+
+def test_smoke_retries_rejected_submission_while_capacity_propagates(monkeypatch):
+    responses = iter([
+        HTTPError("https://api.runpod.ai/run", 409, "Capacity update", {}, None),
+        {"id": "accepted"},
+        {"status": "COMPLETED", "output": {"build_sha": SHA, "choices": [{}]}},
+    ])
+
+    def request(*args, **kwargs):
+        response = next(responses)
+        if isinstance(response, HTTPError):
+            raise response
+        return io.StringIO(json.dumps(response))
+
+    monkeypatch.setattr(deployment, "urlopen", request)
+    monkeypatch.setattr(deployment.time, "sleep", lambda *_: None)
+    assert deployment.wait_for_job("endpoint", "key", SHA) == "accepted"
 
 
 def test_template_uses_only_writable_rest_fields_and_preserves_launch_settings():
