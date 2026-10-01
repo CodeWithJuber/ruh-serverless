@@ -4,20 +4,19 @@ on:
     branches: [main]
   push:
     branches: [main]
-    paths:
-      - "handler.py"
-      - "Dockerfile"
-      - "ruh_model/**"
-      - "backend/**"
-      - "scripts/**"
-      - "checkpoint-manifest.json"
-      - ".dockerignore"
-      - ".github/workflows/build.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ruh-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    if: github.event.repository.private == false
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,8 +28,8 @@ jobs:
 
   build:
     needs: test
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -43,7 +42,12 @@ jobs:
       - name: Fetch and verify checkpoint
         env:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-        run: python scripts/fetch_checkpoint.py
+        run: |
+          if [ -z "$KAGGLE_API_TOKEN" ]; then
+            echo '::error::KAGGLE_API_TOKEN is required in this repository Actions secrets for the checkpoint download.'
+            exit 1
+          fi
+          python scripts/fetch_checkpoint.py
 
       - uses: docker/login-action@v3
         with:
@@ -55,6 +59,36 @@ jobs:
         with:
           context: .
           push: true
+          build-args: RUH_BUILD_SHA=${{ github.sha }}
           tags: |
             ghcr.io/codewithjuber/ruh-serverless:${{ github.sha }}
             ghcr.io/codewithjuber/ruh-serverless:latest
+
+  deploy:
+    name: Deploy RunPod
+    needs: build
+    if: github.event_name != 'pull_request' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check that this is still the latest main commit
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          echo "deploy=$([ "$current" = "$GITHUB_SHA" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Deploy immutable image and verify the worker revision
+        if: steps.current.outputs.deploy == 'true'
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY || secrets.RUNPOD_API_TOKEN }}
+          RUNPOD_ENDPOINT_ID: ${{ vars.RUNPOD_ENDPOINT_ID || '6o38qhvti4knkk' }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: python scripts/deploy_runpod.py

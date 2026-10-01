@@ -110,6 +110,7 @@ def handler(job: dict) -> dict:
                 "total_tokens": in_tok + out_tok,
             },
             "model": "ruh-khalq-akhar-epoch19",
+            "build_sha": os.environ.get("RUH_BUILD_SHA", "unknown"),
             "elapsed_s": round(time.time() - started, 2),
         }
     except Exception as exc:  # noqa: BLE001
