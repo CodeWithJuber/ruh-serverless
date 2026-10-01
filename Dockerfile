@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
     RUH_CHECKPOINT_DIR=/app/checkpoint \
     RUH_DEVICE=cuda
 
-RUN pip install --no-cache-dir runpod
+RUN pip install --no-cache-dir "runpod==1.7.10" numpy
 
 WORKDIR /app
 COPY ruh_model/ /app/ruh_model/

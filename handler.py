@@ -26,10 +26,18 @@ DEVICE = os.environ.get("RUH_DEVICE", "cuda" if torch.cuda.is_available() else "
 MAX_NEW_TOKENS_CAP = int(os.environ.get("RUH_MAX_TOKENS_CAP", "512"))
 
 logger.info("Loading Ruh model from %s on %s ...", CHECKPOINT_DIR, DEVICE)
-_model = RuhModel.from_pretrained(CHECKPOINT_DIR)
-_model.to(DEVICE)
-_model.train(False)  # inference mode
-_tokenizer = BayanTokenizer()
+print(f"[ruh] Loading model from {CHECKPOINT_DIR} on {DEVICE} ...", flush=True)
+try:
+    _model = RuhModel.from_pretrained(CHECKPOINT_DIR)
+    _model.to(DEVICE)
+    _model.train(False)  # inference mode
+    _tokenizer = BayanTokenizer()
+    print("[ruh] Model loaded and warm.", flush=True)
+except Exception as e:
+    print(f"[ruh] FATAL: Failed to load model: {type(e).__name__}: {e}", flush=True)
+    import traceback
+    traceback.print_exc()
+    raise
 logger.info("Ruh model loaded and warm.")
 
 
