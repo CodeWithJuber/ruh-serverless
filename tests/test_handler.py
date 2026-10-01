@@ -7,7 +7,8 @@ import torch
 import handler
 
 
-def test_prompt_context_zero_temperature_and_continuation(monkeypatch):
+@pytest.mark.parametrize("version", [1, 2])
+def test_prompt_context_zero_temperature_and_continuation(monkeypatch, version):
     observed = {}
     class Tokenizer:
         _vocab = SimpleNamespace(n_roots=62)
@@ -25,6 +26,7 @@ def test_prompt_context_zero_temperature_and_continuation(monkeypatch):
             assert roots.device.type == patterns.device.type == "cpu"
             return torch.cat([roots, torch.tensor([[10, 2]])], dim=1)
     monkeypatch.setattr(handler, "DEVICE", "cpu")
+    Tokenizer.version = version
     monkeypatch.setattr(handler, "_model", Model())
     monkeypatch.setattr(handler, "_tokenizer", Tokenizer())
     messages = [{"role": "system", "content": "system rule"}, {"role": "user", "content": "first"}, {"role": "assistant", "content": "second"}, {"role": "user", "content": "third"}]
@@ -32,7 +34,8 @@ def test_prompt_context_zero_temperature_and_continuation(monkeypatch):
     assert result["choices"][0]["message"]["content"] == "generated"
     assert result["usage"] == {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4}
     assert observed["add_eos"] is False and observed["temperature"] == 0
-    assert observed["roots"] == [[4, 5]] and observed["decoded"] == [(10, 1), (2, 1)]
+    pattern = 0 if version == 2 else 1
+    assert observed["roots"] == [[4, 5]] and observed["decoded"] == [(10, pattern), (2, pattern)]
     assert all(text in observed["prompt"] for text in ("system rule", "first", "second", "third"))
 
 
