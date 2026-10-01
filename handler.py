@@ -69,9 +69,12 @@ def _generate(prompt: str, max_tokens: int, temperature: float) -> tuple[str, in
             temperature=temperature if temperature else 1.0,
         )
     gen_list = generated[0].tolist() if generated.ndim == 2 else generated.tolist()
-    gen_tokens = [(int(rid), 0) for rid in gen_list]
+    # Only decode the newly generated tokens (skip the prompt)
+    # Model uses default_pattern_id=1 for generated tokens
+    new_tokens = gen_list[len(tokens):]
+    gen_tokens = [(int(rid), 1) for rid in new_tokens]
     text = _tokenizer.decode(gen_tokens)
-    return text, len(tokens), len(gen_list)
+    return text, len(tokens), len(new_tokens)
 
 
 def handler(job: dict) -> dict:
